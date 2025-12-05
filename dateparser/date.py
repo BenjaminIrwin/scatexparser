@@ -490,7 +490,7 @@ class _ScatexLocaleParser:
             return False
         if not isinstance(scatex_data["scatex_expr"], TemporalExpression):
             return False
-        if scatex_data["period"] not in ("time", "day", "week", "month", "year"):
+        if scatex_data["period"] not in ("time", "second", "minute", "hour", "day", "week", "month", "year", "decade"):
             return False
         return True
 
@@ -977,16 +977,19 @@ class DateDataParser:
 
         date_string = sanitize_date(date_string)
         
-        # Try freshness parser directly for special patterns that may not be
-        # recognized by locale applicability (e.g., "next Monday", "last Friday")
-        # This handles cases where the pattern is valid but the locale doesn't
-        # recognize the combination of words.
-        try:
-            freshness_result = freshness_date_parser.get_scatex_data(date_string, self._settings)
-            if freshness_result and freshness_result["scatex_expr"]:
-                return freshness_result
-        except (OverflowError, ValueError):
-            pass
+        # Try freshness parser directly for "next X" / "last X" patterns that may
+        # not pass locale applicability checks. These patterns don't need translation
+        # since they use English keywords directly.
+        # We exclude "this day/hour/week/month/year" which should go through translation
+        # to become "0 X ago" and be recognized as Today()/Now()/This() appropriately.
+        import regex as re
+        if re.search(r'\b(next|last)\s+\w+\b', date_string, re.I):
+            try:
+                freshness_result = freshness_date_parser.get_scatex_data(date_string, self._settings)
+                if freshness_result and freshness_result["scatex_expr"]:
+                    return freshness_result
+            except (OverflowError, ValueError):
+                pass
 
         for locale in self._get_applicable_locales(date_string):
             parsed_scatex = _ScatexLocaleParser.parse(

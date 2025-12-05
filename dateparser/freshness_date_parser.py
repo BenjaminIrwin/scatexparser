@@ -36,6 +36,23 @@ THIS_PATTERN = re.compile(r"\bthis\s+(\w+)\b", re.I)
 TRANSLATED_YESTERDAY_PATTERN = re.compile(r"\b1\s+day\s+ago\b", re.I)
 TRANSLATED_TOMORROW_PATTERN = re.compile(r"\bin\s+1\s+day\b", re.I)
 
+# Patterns for "0 X ago" translated forms (from relative-type dictionary)
+# These represent "now" (0 second ago), "today" (0 day ago), etc.
+ZERO_SECOND_AGO_PATTERN = re.compile(r"\b0\s+second\s+ago\b", re.I)
+ZERO_MINUTE_AGO_PATTERN = re.compile(r"\b0\s+minute\s+ago\b", re.I)
+ZERO_DAY_AGO_PATTERN = re.compile(r"\b0\s+day\s+ago\b", re.I)
+ZERO_HOUR_AGO_PATTERN = re.compile(r"\b0\s+hour\s+ago\b", re.I)
+ZERO_WEEK_AGO_PATTERN = re.compile(r"\b0\s+week\s+ago\b", re.I)
+ZERO_MONTH_AGO_PATTERN = re.compile(r"\b0\s+month\s+ago\b", re.I)
+ZERO_YEAR_AGO_PATTERN = re.compile(r"\b0\s+year\s+ago\b", re.I)
+
+# Pattern for "this second" which might not be translated
+THIS_SECOND_PATTERN = re.compile(r"\bthis\s+second\b", re.I)
+
+# Patterns for "2 day ago" (day before yesterday) and "in 2 day" (day after tomorrow)
+TWO_DAYS_AGO_PATTERN = re.compile(r"\b2\s+day\s+ago\b", re.I)
+IN_TWO_DAYS_PATTERN = re.compile(r"\bin\s+2\s+day\b", re.I)
+
 WEEKDAY_NAMES = {
     'monday': DayOfWeekType.MONDAY,
     'tuesday': DayOfWeekType.TUESDAY,
@@ -266,8 +283,36 @@ class FreshnessDateDataParser:
         if NOW_PATTERN.search(date_string_clean):
             return (Now(), "time")
         
+        # Check for translated "0 second ago" or "this second" which means "now"
+        if ZERO_SECOND_AGO_PATTERN.search(date_string_clean) or THIS_SECOND_PATTERN.search(date_string_clean):
+            return (Now(), "time")
+        
+        # Check for "0 minute ago" which means "this minute"
+        if ZERO_MINUTE_AGO_PATTERN.search(date_string_clean):
+            return (This(interval=Repeating(unit=Unit.MINUTE)), "minute")
+        
         if TODAY_PATTERN.search(date_string_clean):
             return (Today(), "day")
+        
+        # Check for translated "0 day ago" which means "today"
+        if ZERO_DAY_AGO_PATTERN.search(date_string_clean):
+            return (Today(), "day")
+        
+        # Check for "0 hour ago" which means "this hour"
+        if ZERO_HOUR_AGO_PATTERN.search(date_string_clean):
+            return (This(interval=Repeating(unit=Unit.HOUR)), "hour")
+        
+        # Check for "0 week ago" which means "this week"
+        if ZERO_WEEK_AGO_PATTERN.search(date_string_clean):
+            return (This(interval=Repeating(unit=Unit.WEEK)), "week")
+        
+        # Check for "0 month ago" which means "this month"
+        if ZERO_MONTH_AGO_PATTERN.search(date_string_clean):
+            return (This(interval=Repeating(unit=Unit.MONTH)), "month")
+        
+        # Check for "0 year ago" which means "this year"
+        if ZERO_YEAR_AGO_PATTERN.search(date_string_clean):
+            return (This(interval=Repeating(unit=Unit.YEAR)), "year")
         
         # Check both original and translated versions of yesterday/tomorrow
         if YESTERDAY_PATTERN.search(date_string_clean):
@@ -283,6 +328,22 @@ class FreshnessDateDataParser:
         # Check for translated "in 1 day" which means tomorrow
         if TRANSLATED_TOMORROW_PATTERN.search(date_string_clean):
             return (Tomorrow(), "day")
+        
+        # Check for "2 day ago" (day before yesterday)
+        if TWO_DAYS_AGO_PATTERN.search(date_string_clean):
+            return (Shift(
+                interval=Today(),
+                period=Period(unit=Unit.DAY, value=2),
+                direction=Direction.BEFORE
+            ), "day")
+        
+        # Check for "in 2 day" (day after tomorrow)
+        if IN_TWO_DAYS_PATTERN.search(date_string_clean):
+            return (Shift(
+                interval=Today(),
+                period=Period(unit=Unit.DAY, value=2),
+                direction=Direction.AFTER
+            ), "day")
         
         # Check for "last X" pattern
         last_match = LAST_PATTERN.search(date_string_clean)

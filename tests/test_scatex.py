@@ -13,8 +13,8 @@ from dateparser.scatex import (
     TemporalExpression,
     Year, Month, Day, Hour, Minute, Second,
     DayOfWeek, DayOfWeekType, MonthOfYear, MonthOfYearType,
-    Repeating, Unit,
-    This, Last, Next, Shift, Period, Direction,
+    Repeating, Unit, Direction,
+    This, Last, Next, Shift, Period,
     Today, Yesterday, Tomorrow, Now, Unknown,
 )
 
@@ -244,6 +244,248 @@ class TestEdgeCases:
         anchor = datetime(2023, 10, 15)
         start, end = data.evaluate(anchor)
         assert start == datetime(2023, 10, 7, 0, 0, 0)
+
+
+class TestNewPatternVariants:
+    """Tests for newly added pattern variants (informal, abbreviations, etc.)."""
+    
+    # --- NOW variants ---
+    
+    def test_right_now(self):
+        """Test parsing 'right now'."""
+        result = dateparser.parse("right now", languages=['en'])
+        assert isinstance(result, Now)
+    
+    def test_just_now(self):
+        """Test parsing 'just now'."""
+        result = dateparser.parse("just now", languages=['en'])
+        assert isinstance(result, Now)
+    
+    def test_rn_abbreviation(self):
+        """Test parsing 'rn' (abbreviation for right now)."""
+        result = dateparser.parse("rn", languages=['en'])
+        assert isinstance(result, Now)
+    
+    def test_atm_abbreviation(self):
+        """Test parsing 'atm' (abbreviation for at the moment)."""
+        result = dateparser.parse("atm", languages=['en'])
+        assert isinstance(result, Now)
+    
+    def test_currently(self):
+        """Test parsing 'currently'."""
+        result = dateparser.parse("currently", languages=['en'])
+        assert isinstance(result, Now)
+    
+    def test_presently(self):
+        """Test parsing 'presently'."""
+        result = dateparser.parse("presently", languages=['en'])
+        assert isinstance(result, Now)
+    
+    def test_at_the_moment(self):
+        """Test parsing 'at the moment'."""
+        result = dateparser.parse("at the moment", languages=['en'])
+        assert isinstance(result, Now)
+    
+    def test_as_we_speak(self):
+        """Test parsing 'as we speak'."""
+        result = dateparser.parse("as we speak", languages=['en'])
+        assert isinstance(result, Now)
+    
+    # --- TODAY variants ---
+    
+    def test_2day_abbreviation(self):
+        """Test parsing '2day' (abbreviation for today)."""
+        result = dateparser.parse("2day", languages=['en'])
+        assert isinstance(result, Today)
+    
+    def test_tdy_abbreviation(self):
+        """Test parsing 'tdy' (abbreviation for today)."""
+        result = dateparser.parse("tdy", languages=['en'])
+        assert isinstance(result, Today)
+    
+    def test_earlier_today(self):
+        """Test parsing 'earlier today'."""
+        result = dateparser.parse("earlier today", languages=['en'])
+        assert isinstance(result, Today)
+    
+    def test_as_of_today(self):
+        """Test parsing 'as of today'."""
+        result = dateparser.parse("as of today", languages=['en'])
+        assert isinstance(result, Today)
+    
+    def test_by_cob(self):
+        """Test parsing 'by COB' (close of business)."""
+        result = dateparser.parse("by COB", languages=['en'])
+        assert isinstance(result, Today)
+    
+    def test_this_day(self):
+        """Test parsing 'this day'."""
+        result = dateparser.parse("this day", languages=['en'])
+        assert isinstance(result, Today)
+    
+    def test_on_this_day(self):
+        """Test parsing 'on this day'."""
+        result = dateparser.parse("on this day", languages=['en'])
+        assert isinstance(result, Today)
+    
+    # --- YESTERDAY variants ---
+    
+    def test_yday_abbreviation(self):
+        """Test parsing 'yday' (abbreviation for yesterday)."""
+        result = dateparser.parse("yday", languages=['en'])
+        assert isinstance(result, Yesterday)
+    
+    def test_yest_abbreviation(self):
+        """Test parsing 'yest' (abbreviation for yesterday)."""
+        result = dateparser.parse("yest", languages=['en'])
+        assert isinstance(result, Yesterday)
+    
+    def test_yesterday_morning(self):
+        """Test parsing 'yesterday morning'."""
+        result = dateparser.parse("yesterday morning", languages=['en'])
+        assert isinstance(result, Yesterday)
+    
+    def test_the_day_before(self):
+        """Test parsing 'the day before'."""
+        result = dateparser.parse("the day before", languages=['en'])
+        assert isinstance(result, Yesterday)
+    
+    def test_a_day_ago(self):
+        """Test parsing 'a day ago'."""
+        result = dateparser.parse("a day ago", languages=['en'])
+        assert isinstance(result, Yesterday)
+    
+    # --- TOMORROW variants ---
+    
+    def test_tmrw_abbreviation(self):
+        """Test parsing 'tmrw' (abbreviation for tomorrow)."""
+        result = dateparser.parse("tmrw", languages=['en'])
+        assert isinstance(result, Tomorrow)
+    
+    def test_2moro_abbreviation(self):
+        """Test parsing '2moro' (abbreviation for tomorrow)."""
+        result = dateparser.parse("2moro", languages=['en'])
+        assert isinstance(result, Tomorrow)
+    
+    def test_tomo_abbreviation(self):
+        """Test parsing 'tomo' (abbreviation for tomorrow)."""
+        result = dateparser.parse("tomo", languages=['en'])
+        assert isinstance(result, Tomorrow)
+    
+    def test_the_morrow(self):
+        """Test parsing 'the morrow'."""
+        result = dateparser.parse("the morrow", languages=['en'])
+        assert isinstance(result, Tomorrow)
+    
+    def test_tomorrow_morning(self):
+        """Test parsing 'tomorrow morning'."""
+        result = dateparser.parse("tomorrow morning", languages=['en'])
+        assert isinstance(result, Tomorrow)
+    
+    def test_in_a_day(self):
+        """Test parsing 'in a day'."""
+        result = dateparser.parse("in a day", languages=['en'])
+        assert isinstance(result, Tomorrow)
+    
+    # --- Day before yesterday / Day after tomorrow ---
+    
+    def test_day_before_yesterday(self):
+        """Test parsing 'the day before yesterday'."""
+        result = dateparser.parse("the day before yesterday", languages=['en'])
+        assert isinstance(result, Shift)
+        assert result.direction == Direction.BEFORE
+        assert result.period.value == 2
+        assert result.period.unit == Unit.DAY
+    
+    def test_two_days_ago(self):
+        """Test parsing 'two days ago'."""
+        result = dateparser.parse("two days ago", languages=['en'])
+        assert isinstance(result, Shift)
+        assert result.direction == Direction.BEFORE
+        assert result.period.value == 2
+    
+    def test_day_after_tomorrow(self):
+        """Test parsing 'day after tomorrow'."""
+        result = dateparser.parse("day after tomorrow", languages=['en'])
+        assert isinstance(result, Shift)
+        assert result.direction == Direction.AFTER
+        assert result.period.value == 2
+        assert result.period.unit == Unit.DAY
+    
+    def test_in_two_days(self):
+        """Test parsing 'in two days'."""
+        result = dateparser.parse("in two days", languages=['en'])
+        assert isinstance(result, Shift)
+        assert result.direction == Direction.AFTER
+        assert result.period.value == 2
+    
+    # --- THIS variants ---
+    
+    def test_this_hour(self):
+        """Test parsing 'this hour'."""
+        result = dateparser.parse("this hour", languages=['en'])
+        assert isinstance(result, This)
+        assert isinstance(result.interval, Repeating)
+        assert result.interval.unit == Unit.HOUR
+    
+    def test_this_minute(self):
+        """Test parsing 'this minute'."""
+        result = dateparser.parse("this minute", languages=['en'])
+        assert isinstance(result, This)
+        assert isinstance(result.interval, Repeating)
+        assert result.interval.unit == Unit.MINUTE
+    
+    def test_this_second_is_now(self):
+        """Test parsing 'this second' returns Now."""
+        result = dateparser.parse("this second", languages=['en'])
+        assert isinstance(result, Now)
+
+
+class TestPatternEvaluation:
+    """Tests for evaluating new pattern variants."""
+    
+    @pytest.fixture
+    def anchor(self):
+        """Provide a fixed anchor date for testing."""
+        return datetime(2023, 10, 15, 12, 0, 0)
+    
+    def test_evaluate_day_before_yesterday(self, anchor):
+        """Test evaluating 'the day before yesterday'."""
+        result = dateparser.parse("the day before yesterday", languages=['en'])
+        start, end = result.evaluate(anchor)
+        # 2 days before Oct 15 = Oct 13
+        assert start == datetime(2023, 10, 13, 0, 0, 0)
+        assert end == datetime(2023, 10, 13, 23, 59, 59)
+    
+    def test_evaluate_day_after_tomorrow(self, anchor):
+        """Test evaluating 'day after tomorrow'."""
+        result = dateparser.parse("day after tomorrow", languages=['en'])
+        start, end = result.evaluate(anchor)
+        # 2 days after Oct 15 = Oct 17
+        assert start == datetime(2023, 10, 17, 0, 0, 0)
+        assert end == datetime(2023, 10, 17, 23, 59, 59)
+    
+    def test_evaluate_now_variants_same_as_now(self, anchor):
+        """Test that all NOW variants evaluate identically."""
+        now_result = dateparser.parse("now", languages=['en'])
+        now_start, now_end = now_result.evaluate(anchor)
+        
+        for variant in ["right now", "just now", "rn", "atm", "currently"]:
+            result = dateparser.parse(variant, languages=['en'])
+            start, end = result.evaluate(anchor)
+            assert start == now_start, f"'{variant}' start mismatch"
+            assert end == now_end, f"'{variant}' end mismatch"
+    
+    def test_evaluate_today_variants_same_as_today(self, anchor):
+        """Test that all TODAY variants evaluate identically."""
+        today_result = dateparser.parse("today", languages=['en'])
+        today_start, today_end = today_result.evaluate(anchor)
+        
+        for variant in ["2day", "tdy", "this day", "on this day"]:
+            result = dateparser.parse(variant, languages=['en'])
+            start, end = result.evaluate(anchor)
+            assert start == today_start, f"'{variant}' start mismatch"
+            assert end == today_end, f"'{variant}' end mismatch"
 
 
 if __name__ == "__main__":

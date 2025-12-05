@@ -195,6 +195,7 @@ info = {
             "now",
             "right now",
             "just now",
+            "this second",
             "currently",
             "presently",
             "at present",
