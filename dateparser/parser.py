@@ -2,6 +2,7 @@ import calendar
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 from io import StringIO
+from typing import Optional, Tuple
 
 import pytz
 import regex as re
@@ -16,6 +17,10 @@ from dateparser.utils import (
     set_correct_month_from_settings,
 )
 from dateparser.utils.strptime import strptime
+from dateparser.scatex import (
+    TemporalExpression, Year, Month, Day, Hour, Minute, Second,
+    DayOfWeek, DayOfWeekType, Unknown,
+)
 
 NSP_COMPATIBLE = re.compile(r"\D+")
 MERIDIAN = re.compile(r"am|pm")
@@ -72,6 +77,40 @@ def _parse_absolute(datestring, settings, tz=None):
 
 def _parse_nospaces(datestring, settings, tz=None):
     return _no_spaces_parser.parse(datestring, settings)
+
+
+def _parse_absolute_scatex(datestring: str, settings, tz=None) -> Tuple[Optional[TemporalExpression], Optional[str]]:
+    """
+    Parse an absolute date string and return a SCATEX expression.
+    
+    This function extracts date components (year, month, day, time, weekday)
+    without collapsing them to a datetime, preserving partial dates.
+    
+    :param datestring: The date string to parse
+    :param settings: Parser settings
+    :param tz: Timezone (optional)
+    :return: Tuple of (SCATEX expression, period)
+    """
+    return _scatex_parser.parse(datestring, settings, tz)
+
+
+# Weekday name to DayOfWeekType mapping
+WEEKDAY_MAP = {
+    'monday': DayOfWeekType.MONDAY,
+    'tuesday': DayOfWeekType.TUESDAY,
+    'wednesday': DayOfWeekType.WEDNESDAY,
+    'thursday': DayOfWeekType.THURSDAY,
+    'friday': DayOfWeekType.FRIDAY,
+    'saturday': DayOfWeekType.SATURDAY,
+    'sunday': DayOfWeekType.SUNDAY,
+    'mon': DayOfWeekType.MONDAY,
+    'tue': DayOfWeekType.TUESDAY,
+    'wed': DayOfWeekType.WEDNESDAY,
+    'thu': DayOfWeekType.THURSDAY,
+    'fri': DayOfWeekType.FRIDAY,
+    'sat': DayOfWeekType.SATURDAY,
+    'sun': DayOfWeekType.SUNDAY,
+}
 
 
 class _time_parser:
@@ -744,3 +783,165 @@ class tokenizer:
                     token = nextchar
             else:
                 token += nextchar
+
+
+class _scatex_parser:
+    """
+    Parser that extracts date components and returns SCATEX expressions
+    instead of collapsing to datetime objects.
+    
+    This preserves partial dates (e.g., "October 7" without year) as 
+    SCATEX expressions with None for missing components.
+    """
+    
+    @classmethod
+    def parse(cls, datestring: str, settings, tz=None) -> Tuple[Optional[TemporalExpression], Optional[str]]:
+        """
+        Parse a date string and return a SCATEX expression.
+        
+        :param datestring: The date string to parse
+        :param settings: Parser settings
+        :param tz: Timezone (optional)
+        :return: Tuple of (SCATEX expression, period)
+        """
+        tokens = tokenizer(datestring)
+        
+        # Use the existing _parser to extract components
+        try:
+            po = _parser(tokens.tokenize(), settings)
+        except (ValueError, IndexError):
+            return (None, None)
+        
+        # Extract the parsed components
+        year = po.year
+        month = po.month
+        day = po.day
+        
+        # Check for weekday
+        weekday_token = getattr(po, '_token_weekday', None)
+        weekday_name = None
+        if weekday_token:
+            weekday_name = weekday_token[0].lower() if isinstance(weekday_token, tuple) else weekday_token.lower()
+        
+        # Extract time components if present
+        hour = None
+        minute = None
+        second = None
+        
+        if po.time is not None:
+            try:
+                time_obj = po.time()
+                hour = time_obj.hour
+                minute = time_obj.minute
+                second = time_obj.second if time_obj.second != 0 else None
+            except (ValueError, TypeError):
+                pass
+        
+        # Determine which components were actually parsed (not filled in from RELATIVE_BASE)
+        has_year = po._token_year is not None
+        has_month = po._token_month is not None
+        has_day = po._token_day is not None
+        has_time = po._token_time is not None
+        has_weekday = weekday_token is not None
+        
+        # Build SCATEX expression based on what was actually parsed
+        scatex_expr = cls._build_scatex(
+            year=year if has_year else None,
+            month=month if has_month else None,
+            day=day if has_day else None,
+            hour=hour if has_time else None,
+            minute=minute if has_time and minute is not None else None,
+            second=second if has_time and second is not None else None,
+            weekday_name=weekday_name if has_weekday else None,
+        )
+        
+        # Determine period
+        period = cls._get_period(has_year, has_month, has_day, has_time, has_weekday, settings)
+        
+        return (scatex_expr, period)
+    
+    @classmethod
+    def _build_scatex(
+        cls,
+        year: Optional[int] = None,
+        month: Optional[int] = None,
+        day: Optional[int] = None,
+        hour: Optional[int] = None,
+        minute: Optional[int] = None,
+        second: Optional[int] = None,
+        weekday_name: Optional[str] = None,
+    ) -> TemporalExpression:
+        """Build a SCATEX expression from parsed components."""
+        
+        # If we only have a weekday (no specific date), return DayOfWeek
+        if weekday_name and not (year or month or day):
+            if weekday_name in WEEKDAY_MAP:
+                return DayOfWeek(type=WEEKDAY_MAP[weekday_name])
+        
+        # Build based on most specific component
+        if second is not None:
+            return Second(
+                second=second,
+                minute=minute,
+                hour=hour,
+                day=day,
+                month=month,
+                year=year
+            )
+        elif minute is not None:
+            return Minute(
+                minute=minute,
+                hour=hour,
+                day=day,
+                month=month,
+                year=year
+            )
+        elif hour is not None:
+            return Hour(
+                hour=hour,
+                day=day,
+                month=month,
+                year=year
+            )
+        elif day is not None:
+            return Day(
+                day=day,
+                month=month,
+                year=year
+            )
+        elif month is not None:
+            return Month(
+                month=month,
+                year=year
+            )
+        elif year is not None:
+            return Year(digits=year)
+        elif weekday_name and weekday_name in WEEKDAY_MAP:
+            return DayOfWeek(type=WEEKDAY_MAP[weekday_name])
+        else:
+            return Unknown(reason="No date components found")
+    
+    @classmethod
+    def _get_period(
+        cls,
+        has_year: bool,
+        has_month: bool,
+        has_day: bool,
+        has_time: bool,
+        has_weekday: bool,
+        settings,
+    ) -> str:
+        """Determine the period/granularity of the parsed date."""
+        if has_time and settings.RETURN_TIME_AS_PERIOD:
+            return "time"
+        
+        if has_day or has_weekday or has_time:
+            return "day"
+        
+        if has_month:
+            return "month"
+        
+        if has_year:
+            return "year"
+        
+        return "day"

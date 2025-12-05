@@ -1,7 +1,26 @@
 __version__ = "1.2.2"
 
 from .conf import apply_settings
-from .date import DateDataParser
+from .date import DateDataParser, ScatexData
+
+# Re-export SCATEX types for convenience
+from .scatex import (
+    TemporalExpression,
+    # Core intervals
+    Year, Month, Day, Hour, Minute, Second, Instant, Interval,
+    # Repeating patterns
+    Repeating, DayOfWeek, MonthOfYear, TimeOfDay, RepeatingIntersection,
+    # Relative operators
+    This, Last, Next, Shift, Period, Before, After, Between,
+    # Set operations
+    Union, Intersection,
+    # Convenience expressions
+    Now, Today, Yesterday, Tomorrow, Decade, Century, Quarter, Unknown,
+    # Enums
+    Unit, DayOfWeekType, MonthOfYearType, TimeOfDayType, Direction,
+    # Evaluation helper
+    evaluate_scatex_code, format_interval,
+)
 
 _default_parser = DateDataParser()
 
@@ -16,7 +35,11 @@ def parse(
     settings=None,
     detect_languages_function=None,
 ):
-    """Parse date and time from given date string.
+    """Parse date and time from given date string and return a SCATEX expression.
+
+    SCATEX (SCATE eXecutable) is a compositional representation of temporal
+    expressions that can be evaluated with an anchor datetime to get concrete
+    (start, end) intervals.
 
     :param date_string:
         A string representing date and/or time in a recognizably valid format.
@@ -53,11 +76,38 @@ def parse(
         Note: this function is only used if ``languages`` and ``locales`` are not provided.
     :type detect_languages_function: function
 
-    :return: Returns :class:`datetime <datetime.datetime>` representing parsed date if successful, else returns None
-    :rtype: :class:`datetime <datetime.datetime>`.
+    :return: Returns a SCATEX TemporalExpression if parsing is successful, else returns None.
+        The expression can be evaluated with .evaluate(anchor_datetime) to get (start, end) datetimes.
+    :rtype: TemporalExpression or None
+    
     :raises:
         ``ValueError``: Unknown Language, ``TypeError``: Languages argument must be a list,
         ``SettingValidationError``: A provided setting is not valid.
+
+    Example usage::
+
+        >>> import dateparser
+        >>> from datetime import datetime
+        
+        # Parse returns a SCATEX expression
+        >>> expr = dateparser.parse("October 7, 2023")
+        >>> expr
+        Day(day=7, month=10, year=2023)
+        
+        # Evaluate with an anchor datetime
+        >>> start, end = expr.evaluate(datetime.now())
+        >>> start
+        datetime.datetime(2023, 10, 7, 0, 0, 0)
+        
+        # Relative dates work too
+        >>> expr = dateparser.parse("3 days ago")
+        >>> expr
+        Shift(interval=Today(), period=Period(unit=DAY, value=3), direction=BEFORE)
+        
+        # Partial dates preserve missing components
+        >>> expr = dateparser.parse("October 7")
+        >>> expr
+        Day(day=7, month=10)  # year is None
     """
     parser = _default_parser
 
@@ -76,7 +126,8 @@ def parse(
             detect_languages_function=detect_languages_function,
         )
 
-    data = parser.get_date_data(date_string, date_formats)
+    data = parser.get_scatex_data(date_string, date_formats)
 
     if data:
-        return data["date_obj"]
+        return data["scatex_expr"]
+    return None

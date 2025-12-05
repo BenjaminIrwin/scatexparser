@@ -1,6 +1,7 @@
 import collections
 from collections.abc import Set
 from datetime import datetime, timedelta
+from typing import Optional, Union
 
 import regex as re
 from dateutil.relativedelta import relativedelta
@@ -11,7 +12,7 @@ from dateparser.custom_language_detection.language_mapping import map_languages
 from dateparser.date_parser import date_parser
 from dateparser.freshness_date_parser import freshness_date_parser
 from dateparser.languages.loader import LocaleDataLoader
-from dateparser.parser import _parse_absolute, _parse_nospaces
+from dateparser.parser import _parse_absolute, _parse_nospaces, _parse_absolute_scatex
 from dateparser.timezone_parser import pop_tz_offset_from_string
 from dateparser.utils import (
     apply_timezone_from_settings,
@@ -20,6 +21,17 @@ from dateparser.utils import (
     set_correct_month_from_settings,
 )
 from dateparser.utils.strptime import strptime as patched_strptime
+
+# Import SCATEX types
+from dateparser.scatex import (
+    TemporalExpression,
+    Year, Month, Day, Hour, Minute, Second, Instant, Interval,
+    Repeating, DayOfWeek, MonthOfYear, TimeOfDay, RepeatingIntersection,
+    This, Last, Next, Shift, Period, Before, After, Between,
+    Union as ScatexUnion, Intersection,
+    Now, Today, Yesterday, Tomorrow, Decade, Century, Quarter, Unknown,
+    Unit, DayOfWeekType, MonthOfYearType, TimeOfDayType, Direction,
+)
 
 APOSTROPHE_LOOK_ALIKE_CHARS = [
     "\N{RIGHT SINGLE QUOTATION MARK}",  # '\u2019'
@@ -332,6 +344,157 @@ class _DateLocaleParser:
         return True
 
 
+class _ScatexLocaleParser:
+    """Parser that outputs SCATEX expressions instead of datetime objects."""
+    
+    def __init__(self, locale, date_string, date_formats, settings=None):
+        self._settings = settings
+        if not (date_formats is None or isinstance(date_formats, (list, tuple, Set))):
+            raise TypeError("Date formats should be list, tuple or set of strings")
+
+        self.locale = locale
+        self.date_string = date_string
+        self.date_formats = date_formats
+        self._translated_date = None
+        self._translated_date_with_formatting = None
+        self._parsers = {
+            "timestamp": self._try_timestamp,
+            "negative-timestamp": self._try_negative_timestamp,
+            "relative-time": self._try_freshness_parser,
+            "custom-formats": self._try_given_formats,
+            "absolute-time": self._try_absolute_parser,
+            "no-spaces-time": self._try_nospaces_parser,
+        }
+
+    @classmethod
+    def parse(cls, locale, date_string, date_formats=None, settings=None):
+        instance = cls(locale, date_string, date_formats, settings)
+        return instance._parse()
+
+    def _parse(self):
+        for parser_name in self._settings.PARSERS:
+            scatex_data = self._parsers[parser_name]()
+            if self._is_valid_scatex_data(scatex_data):
+                return scatex_data
+        return None
+
+    def _try_timestamp_parser(self, negative=False):
+        scatex_expr = get_scatex_from_timestamp(
+            self.date_string, self._settings, negative=negative
+        )
+        if scatex_expr:
+            return ScatexData(
+                scatex_expr=scatex_expr,
+                period="time" if self._settings.RETURN_TIME_AS_PERIOD else "day",
+            )
+        return ScatexData(scatex_expr=None, period="day")
+
+    def _try_timestamp(self):
+        return self._try_timestamp_parser()
+
+    def _try_negative_timestamp(self):
+        return self._try_timestamp_parser(negative=True)
+
+    def _try_freshness_parser(self):
+        try:
+            from dateparser.freshness_date_parser import freshness_date_parser
+            return freshness_date_parser.get_scatex_data(
+                self._get_translated_date(), self._settings
+            )
+        except (OverflowError, ValueError):
+            return None
+
+    def _try_absolute_parser(self):
+        return self._try_parser(parse_method=_parse_absolute_scatex)
+
+    def _try_nospaces_parser(self):
+        # For no-spaces parsing, we'll fall back to datetime and convert
+        _order = self._settings.DATE_ORDER
+        try:
+            if self._settings.PREFER_LOCALE_DATE_ORDER:
+                if "DATE_ORDER" not in self._settings._mod_settings:
+                    self._settings.DATE_ORDER = self.locale.info.get(
+                        "date_order", _order
+                    )
+            from dateparser.parser import _no_spaces_parser
+            date_obj, period = _no_spaces_parser.parse(
+                self._get_translated_date(), self._settings
+            )
+            self._settings.DATE_ORDER = _order
+            
+            # Convert datetime to SCATEX
+            if date_obj:
+                scatex_expr = build_scatex_from_components(
+                    year=date_obj.year,
+                    month=date_obj.month,
+                    day=date_obj.day,
+                    hour=date_obj.hour if date_obj.hour != 0 or date_obj.minute != 0 or date_obj.second != 0 else None,
+                    minute=date_obj.minute if date_obj.minute != 0 or date_obj.second != 0 else None,
+                    second=date_obj.second if date_obj.second != 0 else None,
+                )
+                return ScatexData(scatex_expr=scatex_expr, period=period)
+            return ScatexData(scatex_expr=None, period=period)
+        except ValueError:
+            self._settings.DATE_ORDER = _order
+            return None
+
+    def _try_parser(self, parse_method):
+        _order = self._settings.DATE_ORDER
+        try:
+            if self._settings.PREFER_LOCALE_DATE_ORDER:
+                if "DATE_ORDER" not in self._settings._mod_settings:
+                    self._settings.DATE_ORDER = self.locale.info.get(
+                        "date_order", _order
+                    )
+            scatex_expr, period = parse_method(
+                self._get_translated_date(),
+                settings=self._settings,
+            )
+            self._settings.DATE_ORDER = _order
+            return ScatexData(
+                scatex_expr=scatex_expr,
+                period=period,
+            )
+        except ValueError:
+            self._settings.DATE_ORDER = _order
+            return None
+
+    def _try_given_formats(self):
+        if not self.date_formats:
+            return None
+
+        return parse_with_formats_scatex(
+            self._get_translated_date_with_formatting(),
+            self.date_formats,
+            settings=self._settings,
+        )
+
+    def _get_translated_date(self):
+        if self._translated_date is None:
+            self._translated_date = self.locale.translate(
+                self.date_string, keep_formatting=False, settings=self._settings
+            )
+        return self._translated_date
+
+    def _get_translated_date_with_formatting(self):
+        if self._translated_date_with_formatting is None:
+            self._translated_date_with_formatting = self.locale.translate(
+                self.date_string, keep_formatting=True, settings=self._settings
+            )
+        return self._translated_date_with_formatting
+
+    def _is_valid_scatex_data(self, scatex_data):
+        if not isinstance(scatex_data, ScatexData):
+            return False
+        if scatex_data["scatex_expr"] is None or not scatex_data["period"]:
+            return False
+        if not isinstance(scatex_data["scatex_expr"], TemporalExpression):
+            return False
+        if scatex_data["period"] not in ("time", "day", "week", "month", "year"):
+            return False
+        return True
+
+
 class DateData:
     """
     Class that represents the parsed data with useful information.
@@ -359,6 +522,247 @@ class DateData:
         )
 
         return "{}({})".format(self.__class__.__name__, properties_text)
+
+
+class ScatexData:
+    """
+    Class that represents parsed SCATEX temporal expression data.
+    It can be accessed with square brackets like a dict object.
+    
+    The scatex_expr is a SCATEX TemporalExpression that can be evaluated
+    with an anchor datetime to get concrete (start, end) intervals.
+    """
+
+    def __init__(self, *, scatex_expr: Optional[TemporalExpression] = None, 
+                 period: Optional[str] = None, locale: Optional[str] = None):
+        self.scatex_expr = scatex_expr
+        self.period = period
+        self.locale = locale
+
+    def __getitem__(self, k):
+        if not hasattr(self, k):
+            raise KeyError(k)
+        return getattr(self, k)
+
+    def __setitem__(self, k, v):
+        if not hasattr(self, k):
+            raise KeyError(k)
+        setattr(self, k, v)
+
+    def __repr__(self):
+        properties_text = ", ".join(
+            "{}={}".format(prop, val.__repr__()) for prop, val in self.__dict__.items()
+        )
+        return "{}({})".format(self.__class__.__name__, properties_text)
+    
+    def evaluate(self, anchor: datetime):
+        """
+        Evaluate the SCATEX expression with the given anchor datetime.
+        
+        :param anchor: Reference datetime for resolving relative expressions
+        :return: Tuple of (start, end) datetimes
+        """
+        if self.scatex_expr is None:
+            return (None, None)
+        return self.scatex_expr.evaluate(anchor)
+
+
+def build_scatex_from_components(
+    year: Optional[int] = None,
+    month: Optional[int] = None, 
+    day: Optional[int] = None,
+    hour: Optional[int] = None,
+    minute: Optional[int] = None,
+    second: Optional[int] = None,
+    weekday: Optional[str] = None,
+    time_of_day: Optional[str] = None,
+) -> TemporalExpression:
+    """
+    Build a SCATEX expression from parsed date/time components.
+    
+    Components can be None for partial dates. The most specific
+    available component determines the expression type.
+    
+    :param year: Year value (e.g., 2023)
+    :param month: Month value (1-12)
+    :param day: Day value (1-31)
+    :param hour: Hour value (0-23)
+    :param minute: Minute value (0-59)
+    :param second: Second value (0-59)
+    :param weekday: Weekday name (e.g., "monday", "friday")
+    :param time_of_day: Time of day name (e.g., "morning", "evening")
+    :return: SCATEX TemporalExpression
+    """
+    # Handle weekday references
+    if weekday and not (year or month or day):
+        weekday_map = {
+            'monday': DayOfWeekType.MONDAY,
+            'tuesday': DayOfWeekType.TUESDAY,
+            'wednesday': DayOfWeekType.WEDNESDAY,
+            'thursday': DayOfWeekType.THURSDAY,
+            'friday': DayOfWeekType.FRIDAY,
+            'saturday': DayOfWeekType.SATURDAY,
+            'sunday': DayOfWeekType.SUNDAY,
+        }
+        weekday_lower = weekday.lower()
+        if weekday_lower in weekday_map:
+            day_of_week_expr = DayOfWeek(type=weekday_map[weekday_lower])
+            
+            # If we have time-of-day, intersect with it
+            if time_of_day:
+                tod_map = {
+                    'morning': TimeOfDayType.MORNING,
+                    'afternoon': TimeOfDayType.AFTERNOON,
+                    'evening': TimeOfDayType.EVENING,
+                    'night': TimeOfDayType.NIGHT,
+                    'noon': TimeOfDayType.NOON,
+                    'midnight': TimeOfDayType.MIDNIGHT,
+                    'dawn': TimeOfDayType.DAWN,
+                }
+                tod_lower = time_of_day.lower()
+                if tod_lower in tod_map:
+                    return Intersection(intervals=[
+                        day_of_week_expr,
+                        TimeOfDay(type=tod_map[tod_lower])
+                    ])
+            return day_of_week_expr
+    
+    # Build based on most specific component available
+    if second is not None:
+        return Second(
+            second=second,
+            minute=minute,
+            hour=hour,
+            day=day,
+            month=month,
+            year=year
+        )
+    elif minute is not None:
+        return Minute(
+            minute=minute,
+            hour=hour,
+            day=day,
+            month=month,
+            year=year
+        )
+    elif hour is not None:
+        return Hour(
+            hour=hour,
+            day=day,
+            month=month,
+            year=year
+        )
+    elif day is not None:
+        return Day(
+            day=day,
+            month=month,
+            year=year
+        )
+    elif month is not None:
+        return Month(
+            month=month,
+            year=year
+        )
+    elif year is not None:
+        return Year(digits=year)
+    else:
+        return Unknown(reason="No date components found")
+
+
+def get_scatex_from_timestamp(date_string: str, settings, negative: bool = False) -> Optional[TemporalExpression]:
+    """
+    Parse a timestamp and return a SCATEX Instant expression.
+    
+    :param date_string: String containing a Unix timestamp
+    :param settings: Parser settings
+    :param negative: Whether to look for negative timestamps
+    :return: Instant expression or None if not a timestamp
+    """
+    if negative:
+        match = RE_SEARCH_NEGATIVE_TIMESTAMP.search(date_string)
+    else:
+        match = RE_SEARCH_TIMESTAMP.search(date_string)
+
+    if match:
+        if (
+            settings is None
+            or settings.TIMEZONE is None
+            or "local" in settings.TIMEZONE.lower()
+        ):
+            timezone = get_localzone()
+        else:
+            timezone = get_timezone_from_tz_string(settings.TIMEZONE)
+
+        seconds = int(match.group(1))
+        millis = int(match.group(2) or 0)
+        micros = int(match.group(3) or 0)
+        date_obj = datetime.fromtimestamp(seconds, timezone).replace(
+            microsecond=millis * 1000 + micros, tzinfo=None
+        )
+        date_obj = apply_timezone_from_settings(date_obj, settings)
+        
+        # Return as an Instant with full datetime info
+        return Second(
+            second=date_obj.second,
+            minute=date_obj.minute,
+            hour=date_obj.hour,
+            day=date_obj.day,
+            month=date_obj.month,
+            year=date_obj.year
+        )
+    return None
+
+
+def parse_with_formats_scatex(date_string: str, date_formats: list, settings) -> ScatexData:
+    """
+    Parse with formats and return a ScatexData with SCATEX expression.
+    
+    :param date_string: The date string to parse
+    :param date_formats: List of strptime format strings
+    :param settings: Parser settings
+    :return: ScatexData with scatex_expr
+    """
+    period = "day"
+    for date_format in date_formats:
+        try:
+            date_obj = patched_strptime(date_string, date_format)
+        except ValueError:
+            continue
+        else:
+            # Determine which components are present in the format
+            has_year = "%y" in date_format or "%Y" in date_format
+            has_month = any(m in date_format for m in ["%m", "%b", "%B"])
+            has_day = "%d" in date_format
+            has_hour = "%H" in date_format or "%I" in date_format
+            has_minute = "%M" in date_format
+            has_second = "%S" in date_format
+            
+            # Build SCATEX with only the components that were actually parsed
+            year = date_obj.year if has_year else None
+            month = date_obj.month if has_month else None
+            day = date_obj.day if has_day else None
+            hour = date_obj.hour if has_hour else None
+            minute = date_obj.minute if has_minute else None
+            second = date_obj.second if has_second else None
+            
+            # Determine period
+            if not has_month and not has_day:
+                period = "year"
+            elif not has_day:
+                period = "month"
+            elif has_hour or has_minute or has_second:
+                period = "time" if settings.RETURN_TIME_AS_PERIOD else "day"
+            else:
+                period = "day"
+            
+            scatex_expr = build_scatex_from_components(
+                year=year, month=month, day=day,
+                hour=hour, minute=minute, second=second
+            )
+            
+            return ScatexData(scatex_expr=scatex_expr, period=period)
+    
+    return ScatexData(scatex_expr=None, period=period)
 
 
 class DateDataParser:
@@ -532,6 +936,69 @@ class DateDataParser:
         fields = date_data.__dict__.keys()
         date_tuple = collections.namedtuple("DateData", fields)
         return date_tuple(**date_data.__dict__)
+
+    def get_scatex_data(self, date_string, date_formats=None):
+        """
+        Parse string representing date and/or time and return a SCATEX expression.
+        Supports parsing multiple languages and timezones.
+
+        :param date_string:
+            A string representing date and/or time in a recognizably valid format.
+        :type date_string: str
+        :param date_formats:
+            A list of format strings using directives as given
+            `here <https://docs.python.org/2/library/datetime.html#strftime-and-strptime-behavior>`_.
+            The parser applies formats one by one, taking into account the detected languages.
+        :type date_formats: list
+
+        :return: a ``ScatexData`` object containing a SCATEX TemporalExpression.
+
+        :raises: ValueError - Unknown Language
+
+        .. note:: *Period* values can be a 'day' (default), 'week', 'month', 'year', 'time'.
+
+        *Period* represents the granularity of date parsed from the given string.
+
+        Example usage:
+            >>> parser = DateDataParser()
+            >>> result = parser.get_scatex_data('October 7, 2023')
+            >>> result.scatex_expr
+            Day(day=7, month=10, year=2023)
+            >>> result.scatex_expr.evaluate(datetime.now())
+            (datetime(2023, 10, 7, 0, 0, 0), datetime(2023, 10, 7, 23, 59, 59))
+        """
+        if not isinstance(date_string, str):
+            raise TypeError("Input type must be str")
+
+        # Try custom formats first
+        res = parse_with_formats_scatex(date_string, date_formats or [], self._settings)
+        if res["scatex_expr"]:
+            return res
+
+        date_string = sanitize_date(date_string)
+        
+        # Try freshness parser directly for special patterns that may not be
+        # recognized by locale applicability (e.g., "next Monday", "last Friday")
+        # This handles cases where the pattern is valid but the locale doesn't
+        # recognize the combination of words.
+        try:
+            freshness_result = freshness_date_parser.get_scatex_data(date_string, self._settings)
+            if freshness_result and freshness_result["scatex_expr"]:
+                return freshness_result
+        except (OverflowError, ValueError):
+            pass
+
+        for locale in self._get_applicable_locales(date_string):
+            parsed_scatex = _ScatexLocaleParser.parse(
+                locale, date_string, date_formats, settings=self._settings
+            )
+            if parsed_scatex:
+                parsed_scatex["locale"] = locale.shortname
+                if self.try_previous_locales:
+                    self.previous_locales[locale] = None
+                return parsed_scatex
+        
+        return ScatexData(scatex_expr=None, period="day", locale=None)
 
     def _get_applicable_locales(self, date_string):
         pop_tz_cache = []

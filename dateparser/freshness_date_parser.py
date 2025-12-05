@@ -1,16 +1,112 @@
 from datetime import datetime, time, timezone
+from typing import Optional, Tuple
 
 import regex as re
 from dateutil.relativedelta import relativedelta
 from tzlocal import get_localzone
 
 from dateparser.utils import apply_timezone, localize_timezone, strip_braces
+from dateparser.scatex import (
+    TemporalExpression, Today, Yesterday, Tomorrow, Now,
+    Shift, Period, Unit, Direction,
+    Repeating, DayOfWeek, MonthOfYear, Last, Next, This,
+    DayOfWeekType, MonthOfYearType, TimeOfDay, TimeOfDayType,
+    Hour, Unknown,
+)
 
 from .parser import time_parser
 from .timezone_parser import pop_tz_offset_from_string
 
 _UNITS = r"decade|year|month|week|day|hour|minute|second"
 PATTERN = re.compile(r"(\d+[.,]?\d*)\s*(%s)\b" % _UNITS, re.I | re.S | re.U)
+
+# Patterns for special relative expressions
+YESTERDAY_PATTERN = re.compile(r"\byesterday\b", re.I)
+TOMORROW_PATTERN = re.compile(r"\btomorrow\b", re.I)
+TODAY_PATTERN = re.compile(r"\btoday\b", re.I)
+NOW_PATTERN = re.compile(r"\bnow\b", re.I)
+
+# Patterns for "last X" / "next X" expressions
+# Note: Use \s+ to handle multiple spaces (locale translation sometimes adds extra spaces)
+LAST_PATTERN = re.compile(r"\blast\s+(\w+)\b", re.I)
+NEXT_PATTERN = re.compile(r"\bnext\s+(\w+)\b", re.I)
+THIS_PATTERN = re.compile(r"\bthis\s+(\w+)\b", re.I)
+
+# Patterns for translated versions of special keywords
+TRANSLATED_YESTERDAY_PATTERN = re.compile(r"\b1\s+day\s+ago\b", re.I)
+TRANSLATED_TOMORROW_PATTERN = re.compile(r"\bin\s+1\s+day\b", re.I)
+
+WEEKDAY_NAMES = {
+    'monday': DayOfWeekType.MONDAY,
+    'tuesday': DayOfWeekType.TUESDAY,
+    'wednesday': DayOfWeekType.WEDNESDAY,
+    'thursday': DayOfWeekType.THURSDAY,
+    'friday': DayOfWeekType.FRIDAY,
+    'saturday': DayOfWeekType.SATURDAY,
+    'sunday': DayOfWeekType.SUNDAY,
+    'mon': DayOfWeekType.MONDAY,
+    'tue': DayOfWeekType.TUESDAY,
+    'wed': DayOfWeekType.WEDNESDAY,
+    'thu': DayOfWeekType.THURSDAY,
+    'fri': DayOfWeekType.FRIDAY,
+    'sat': DayOfWeekType.SATURDAY,
+    'sun': DayOfWeekType.SUNDAY,
+}
+
+MONTH_NAMES = {
+    'january': MonthOfYearType.JANUARY,
+    'february': MonthOfYearType.FEBRUARY,
+    'march': MonthOfYearType.MARCH,
+    'april': MonthOfYearType.APRIL,
+    'may': MonthOfYearType.MAY,
+    'june': MonthOfYearType.JUNE,
+    'july': MonthOfYearType.JULY,
+    'august': MonthOfYearType.AUGUST,
+    'september': MonthOfYearType.SEPTEMBER,
+    'october': MonthOfYearType.OCTOBER,
+    'november': MonthOfYearType.NOVEMBER,
+    'december': MonthOfYearType.DECEMBER,
+    'jan': MonthOfYearType.JANUARY,
+    'feb': MonthOfYearType.FEBRUARY,
+    'mar': MonthOfYearType.MARCH,
+    'apr': MonthOfYearType.APRIL,
+    'jun': MonthOfYearType.JUNE,
+    'jul': MonthOfYearType.JULY,
+    'aug': MonthOfYearType.AUGUST,
+    'sep': MonthOfYearType.SEPTEMBER,
+    'oct': MonthOfYearType.OCTOBER,
+    'nov': MonthOfYearType.NOVEMBER,
+    'dec': MonthOfYearType.DECEMBER,
+}
+
+TIME_OF_DAY_NAMES = {
+    'morning': TimeOfDayType.MORNING,
+    'afternoon': TimeOfDayType.AFTERNOON,
+    'evening': TimeOfDayType.EVENING,
+    'night': TimeOfDayType.NIGHT,
+    'noon': TimeOfDayType.NOON,
+    'midnight': TimeOfDayType.MIDNIGHT,
+    'dawn': TimeOfDayType.DAWN,
+}
+
+UNIT_NAMES = {
+    'second': Unit.SECOND,
+    'seconds': Unit.SECOND,
+    'minute': Unit.MINUTE,
+    'minutes': Unit.MINUTE,
+    'hour': Unit.HOUR,
+    'hours': Unit.HOUR,
+    'day': Unit.DAY,
+    'days': Unit.DAY,
+    'week': Unit.WEEK,
+    'weeks': Unit.WEEK,
+    'month': Unit.MONTH,
+    'months': Unit.MONTH,
+    'year': Unit.YEAR,
+    'years': Unit.YEAR,
+    'decade': Unit.DECADE,
+    'decades': Unit.DECADE,
+}
 
 
 class FreshnessDateDataParser:
@@ -151,6 +247,227 @@ class FreshnessDateDataParser:
 
         date, period = self.parse(date_string, settings)
         return DateData(date_obj=date, period=period)
+
+    def parse_scatex(self, date_string: str, settings) -> Tuple[Optional[TemporalExpression], Optional[str]]:
+        """
+        Parse a relative date string and return a SCATEX expression.
+        
+        :param date_string: The date string to parse (e.g., "3 days ago", "next Monday")
+        :param settings: Parser settings
+        :return: Tuple of (SCATEX expression, period)
+        """
+        date_string = strip_braces(date_string)
+        date_string_clean, _ = pop_tz_offset_from_string(date_string)
+        
+        # Normalize multiple spaces to single space (locale translation can add extra spaces)
+        date_string_clean = re.sub(r'\s+', ' ', date_string_clean).strip()
+        
+        # Check for special keywords first (including translated versions)
+        if NOW_PATTERN.search(date_string_clean):
+            return (Now(), "time")
+        
+        if TODAY_PATTERN.search(date_string_clean):
+            return (Today(), "day")
+        
+        # Check both original and translated versions of yesterday/tomorrow
+        if YESTERDAY_PATTERN.search(date_string_clean):
+            return (Yesterday(), "day")
+        
+        # Check for translated "1 day ago" which means yesterday
+        if TRANSLATED_YESTERDAY_PATTERN.search(date_string_clean):
+            return (Yesterday(), "day")
+        
+        if TOMORROW_PATTERN.search(date_string_clean):
+            return (Tomorrow(), "day")
+        
+        # Check for translated "in 1 day" which means tomorrow
+        if TRANSLATED_TOMORROW_PATTERN.search(date_string_clean):
+            return (Tomorrow(), "day")
+        
+        # Check for "last X" pattern
+        last_match = LAST_PATTERN.search(date_string_clean)
+        if last_match:
+            unit_name = last_match.group(1).lower()
+            expr = self._build_last_next_scatex(unit_name, is_last=True)
+            if expr:
+                period = self._get_period_for_unit(unit_name)
+                return (expr, period)
+        
+        # Check for "next X" pattern
+        next_match = NEXT_PATTERN.search(date_string_clean)
+        if next_match:
+            unit_name = next_match.group(1).lower()
+            expr = self._build_last_next_scatex(unit_name, is_last=False)
+            if expr:
+                period = self._get_period_for_unit(unit_name)
+                return (expr, period)
+        
+        # Check for "this X" pattern
+        this_match = THIS_PATTERN.search(date_string_clean)
+        if this_match:
+            unit_name = this_match.group(1).lower()
+            expr = self._build_this_scatex(unit_name)
+            if expr:
+                period = self._get_period_for_unit(unit_name)
+                return (expr, period)
+        
+        # Parse relative duration expressions like "3 days ago", "in 2 weeks"
+        if not self._are_all_words_units(date_string_clean):
+            return (None, None)
+        
+        kwargs = self.get_kwargs(date_string_clean)
+        if not kwargs:
+            return (None, None)
+        
+        # Build SCATEX Shift expression
+        scatex_expr, period = self._build_shift_scatex(date_string_clean, kwargs, settings)
+        return (scatex_expr, period)
+    
+    def _build_last_next_scatex(self, unit_name: str, is_last: bool) -> Optional[TemporalExpression]:
+        """Build Last() or Next() SCATEX expression for 'last X' / 'next X' patterns."""
+        wrapper = Last if is_last else Next
+        
+        # Check if it's a weekday
+        if unit_name in WEEKDAY_NAMES:
+            return wrapper(interval=DayOfWeek(type=WEEKDAY_NAMES[unit_name]))
+        
+        # Check if it's a month
+        if unit_name in MONTH_NAMES:
+            return wrapper(interval=MonthOfYear(type=MONTH_NAMES[unit_name]))
+        
+        # Check if it's a time of day
+        if unit_name in TIME_OF_DAY_NAMES:
+            return wrapper(interval=TimeOfDay(type=TIME_OF_DAY_NAMES[unit_name]))
+        
+        # Check if it's a unit (week, month, year, etc.)
+        if unit_name in UNIT_NAMES:
+            return wrapper(interval=Repeating(unit=UNIT_NAMES[unit_name]))
+        
+        return None
+    
+    def _build_this_scatex(self, unit_name: str) -> Optional[TemporalExpression]:
+        """Build This() SCATEX expression for 'this X' patterns."""
+        # Check if it's a weekday
+        if unit_name in WEEKDAY_NAMES:
+            return This(interval=DayOfWeek(type=WEEKDAY_NAMES[unit_name]))
+        
+        # Check if it's a month
+        if unit_name in MONTH_NAMES:
+            return This(interval=MonthOfYear(type=MONTH_NAMES[unit_name]))
+        
+        # Check if it's a time of day
+        if unit_name in TIME_OF_DAY_NAMES:
+            return This(interval=TimeOfDay(type=TIME_OF_DAY_NAMES[unit_name]))
+        
+        # Check if it's a unit (week, month, year, etc.)
+        if unit_name in UNIT_NAMES:
+            return This(interval=Repeating(unit=UNIT_NAMES[unit_name]))
+        
+        return None
+    
+    def _build_shift_scatex(self, date_string: str, kwargs: dict, settings) -> Tuple[Optional[TemporalExpression], str]:
+        """
+        Build a Shift SCATEX expression from parsed duration kwargs.
+        
+        Examples:
+            "3 days ago" → Shift(interval=Today(), period=Period(unit=DAY, value=3), direction=BEFORE)
+            "in 2 weeks" → Shift(interval=Today(), period=Period(unit=WEEK, value=2), direction=AFTER)
+        """
+        # Determine direction
+        is_future = (
+            re.search(r"\bin\b", date_string)
+            or (re.search(r"\bfuture\b", settings.PREFER_DATES_FROM) and not re.search(r"\bago\b", date_string))
+        )
+        direction = Direction.AFTER if is_future else Direction.BEFORE
+        
+        # Determine period from the largest unit
+        period = "day"
+        if "days" not in kwargs:
+            for k in ["weeks", "months", "years"]:
+                if k in kwargs:
+                    period = k[:-1]
+                    break
+        
+        # Build the shift expression
+        # For multiple units, we need to chain shifts or combine periods
+        # For simplicity, we'll use the primary (largest) unit
+        
+        # Map kwargs to SCATEX units and build Period objects
+        unit_priority = ['years', 'months', 'weeks', 'days', 'hours', 'minutes', 'seconds']
+        
+        # Find the primary unit (largest)
+        primary_unit = None
+        primary_value = 0
+        for unit_name in unit_priority:
+            if unit_name in kwargs:
+                primary_unit = unit_name
+                primary_value = int(kwargs[unit_name])
+                break
+        
+        if primary_unit is None:
+            return (None, None)
+        
+        # Map to SCATEX Unit
+        unit_map = {
+            'seconds': Unit.SECOND,
+            'minutes': Unit.MINUTE,
+            'hours': Unit.HOUR,
+            'days': Unit.DAY,
+            'weeks': Unit.WEEK,
+            'months': Unit.MONTH,
+            'years': Unit.YEAR,
+        }
+        
+        scatex_unit = unit_map.get(primary_unit, Unit.DAY)
+        
+        # Build the Shift expression
+        # Start with Today() as the base interval
+        base_interval = Today()
+        
+        # If there are multiple units, we build nested shifts
+        # Start from the smallest unit and work up
+        result_expr = base_interval
+        
+        for unit_name in reversed(unit_priority):
+            if unit_name in kwargs and kwargs[unit_name] > 0:
+                scatex_unit = unit_map.get(unit_name, Unit.DAY)
+                value = int(kwargs[unit_name])
+                result_expr = Shift(
+                    interval=result_expr,
+                    period=Period(unit=scatex_unit, value=value),
+                    direction=direction
+                )
+        
+        return (result_expr, period)
+    
+    def _get_period_for_unit(self, unit_name: str) -> str:
+        """Get the period string for a unit name."""
+        if unit_name in WEEKDAY_NAMES:
+            return "day"
+        if unit_name in MONTH_NAMES:
+            return "month"
+        if unit_name in TIME_OF_DAY_NAMES:
+            return "time"
+        if unit_name in ['year', 'years']:
+            return "year"
+        if unit_name in ['month', 'months']:
+            return "month"
+        if unit_name in ['week', 'weeks']:
+            return "week"
+        return "day"
+    
+    def get_scatex_data(self, date_string: str, settings=None):
+        """
+        Parse a relative date string and return ScatexData.
+        
+        :param date_string: The date string to parse
+        :param settings: Parser settings
+        :return: ScatexData object with scatex_expr
+        """
+        from dateparser.date import ScatexData
+        
+        scatex_expr, period = self.parse_scatex(date_string, settings)
+        return ScatexData(scatex_expr=scatex_expr, period=period)
 
 
 freshness_date_parser = FreshnessDateDataParser()
