@@ -441,6 +441,89 @@ class TestNewPatternVariants:
         assert isinstance(result, Now)
 
 
+class TestThisWeekday:
+    """Tests for 'this [weekday]' patterns."""
+    
+    def test_this_monday(self):
+        """Test parsing 'this Monday'."""
+        result = dateparser.parse("this Monday", languages=['en'])
+        assert isinstance(result, This)
+        assert isinstance(result.interval, DayOfWeek)
+        assert result.interval.type == DayOfWeekType.MONDAY
+    
+    def test_this_friday(self):
+        """Test parsing 'this Friday'."""
+        result = dateparser.parse("this Friday", languages=['en'])
+        assert isinstance(result, This)
+        assert isinstance(result.interval, DayOfWeek)
+        assert result.interval.type == DayOfWeekType.FRIDAY
+    
+    def test_this_saturday(self):
+        """Test parsing 'this Saturday'."""
+        result = dateparser.parse("this Saturday", languages=['en'])
+        assert isinstance(result, This)
+        assert isinstance(result.interval, DayOfWeek)
+        assert result.interval.type == DayOfWeekType.SATURDAY
+
+
+class TestRobustness:
+    """Tests for robustness and unusual inputs."""
+    
+    def test_whitespace_only_returns_none(self):
+        """Test whitespace-only string returns None."""
+        assert dateparser.parse("   ") is None
+    
+    def test_garbage_returns_none(self):
+        """Test garbage input returns None."""
+        assert dateparser.parse("???") is None
+        assert dateparser.parse("abc123xyz") is None
+    
+    def test_case_insensitive_today(self):
+        """Test TODAY, Today, TODAY all work."""
+        assert isinstance(dateparser.parse("TODAY", languages=['en']), Today)
+        assert isinstance(dateparser.parse("today", languages=['en']), Today)
+        assert isinstance(dateparser.parse("ToDay", languages=['en']), Today)
+    
+    def test_case_insensitive_abbreviations(self):
+        """Test RN, rn, Rn all work."""
+        assert isinstance(dateparser.parse("RN", languages=['en']), Now)
+        assert isinstance(dateparser.parse("rn", languages=['en']), Now)
+        assert isinstance(dateparser.parse("ATM", languages=['en']), Now)
+    
+    def test_extra_whitespace(self):
+        """Test extra whitespace is handled."""
+        assert isinstance(dateparser.parse("  today  ", languages=['en']), Today)
+        assert isinstance(dateparser.parse("3  days  ago", languages=['en']), Shift)
+        assert isinstance(dateparser.parse("next   Monday", languages=['en']), Next)
+    
+    def test_typo_tolerance_tomorrow(self):
+        """Test common typos of tomorrow work."""
+        assert isinstance(dateparser.parse("tommorow", languages=['en']), Tomorrow)
+        assert isinstance(dateparser.parse("tomorow", languages=['en']), Tomorrow)
+    
+    def test_punctuation_tolerance(self):
+        """Test punctuation at end is handled."""
+        assert isinstance(dateparser.parse("today.", languages=['en']), Today)
+        assert isinstance(dateparser.parse("tomorrow!", languages=['en']), Tomorrow)
+    
+    def test_zero_days_ago_is_today(self):
+        """Test '0 days ago' is Today."""
+        result = dateparser.parse("0 days ago", languages=['en'])
+        assert isinstance(result, Today)
+    
+    def test_fractional_days(self):
+        """Test '1.5 days ago' works."""
+        result = dateparser.parse("1.5 days ago", languages=['en'])
+        assert isinstance(result, Shift)
+    
+    def test_large_numbers(self):
+        """Test large numbers work."""
+        result = dateparser.parse("100 years ago", languages=['en'])
+        assert isinstance(result, Shift)
+        result = dateparser.parse("1000 days ago", languages=['en'])
+        assert isinstance(result, Shift)
+
+
 class TestPatternEvaluation:
     """Tests for evaluating new pattern variants."""
     

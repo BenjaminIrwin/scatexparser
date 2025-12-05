@@ -977,13 +977,15 @@ class DateDataParser:
 
         date_string = sanitize_date(date_string)
         
-        # Try freshness parser directly for "next X" / "last X" patterns that may
+        # Try freshness parser directly for "next/last/this X" patterns that may
         # not pass locale applicability checks. These patterns don't need translation
         # since they use English keywords directly.
-        # We exclude "this day/hour/week/month/year" which should go through translation
-        # to become "0 X ago" and be recognized as Today()/Now()/This() appropriately.
+        # For "this X", we handle weekdays (this Monday) but exclude units (this week/month)
+        # which should go through translation to become "0 X ago".
         import regex as re
-        if re.search(r'\b(next|last)\s+\w+\b', date_string, re.I):
+        WEEKDAY_PATTERN = r'monday|tuesday|wednesday|thursday|friday|saturday|sunday'
+        if (re.search(r'\b(next|last)\s+\w+\b', date_string, re.I) or
+            re.search(rf'\bthis\s+({WEEKDAY_PATTERN})\b', date_string, re.I)):
             try:
                 freshness_result = freshness_date_parser.get_scatex_data(date_string, self._settings)
                 if freshness_result and freshness_result["scatex_expr"]:
